@@ -47,6 +47,10 @@ If you have any feedback or suggestions for BanHammer App, please contact my aut
 
 ## Changes
 
+### 1.0.1
+
+- Fix issue with the app not appearing in comment context menus.
+
 ### 1.0.0
 
 - Initial release.

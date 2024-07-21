@@ -91,7 +91,7 @@ Devvit.addTrigger({
 Devvit.addMenuItem({
     forUserType: "moderator",
     label: "BanHammer User",
-    location: "post" || "comment",
+    location: ["comment", "post"],
     onPress: onPressHandler,
 });
 
