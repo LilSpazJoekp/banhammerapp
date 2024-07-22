@@ -9,6 +9,7 @@ import {
     MenuItemOnPressEvent,
     OnTriggerEvent,
     Post,
+    RedditAPIClient,
     SettingScope,
     SettingsFormFieldValidatorEvent,
     Subreddit,
@@ -204,7 +205,7 @@ async function validateSetting(
     const {reddit, redis} = context;
     // await context.modLog.add({action: "dev_platform_app_changed", details: "Updated BanHammer settings"});
     const subreddit = await reddit.getCurrentSubreddit();
-    const wikiPage = await reddit.getWikiPage(subreddit.name, WIKI_PAGE);
+    const wikiPage = await ensureWikiPage(reddit, subreddit);
     await redis.set("wiki_update_required", "true");
     await writeConfigToWikiPage(
         wikiPage,
@@ -304,6 +305,17 @@ async function banFormOnSubmitHandler(event: FormOnSubmitEvent, context: Context
     });
 }
 
+async function ensureWikiPage(reddit: RedditAPIClient, subreddit: Subreddit): Promise<WikiPage> {
+    try {
+        return await reddit.createWikiPage({
+            subredditName: subreddit.name,
+            page: WIKI_PAGE,
+            content: '{"allowlist":[],"denylist":[],"enableAllowlist":false,"lastUpdated":""}',
+        });
+    } catch (e) {
+    }
+    return await reddit.getWikiPage(subreddit.name, WIKI_PAGE);
+}
 
 async function onEventHandler(event: OnTriggerEvent<ModAction>, context: TriggerContext) {
     const {reddit, redis, settings} = context;
@@ -316,7 +328,7 @@ async function onEventHandler(event: OnTriggerEvent<ModAction>, context: Trigger
         return;
     }
     const subreddit = await reddit.getCurrentSubreddit();
-    const wikiPage = await reddit.getWikiPage(subreddit.name, WIKI_PAGE);
+    const wikiPage = await ensureWikiPage(reddit, subreddit);
     await redis.set("wiki_update_required", "false");
     await writeConfigToWikiPage(
         wikiPage,
