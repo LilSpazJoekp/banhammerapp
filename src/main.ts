@@ -1,13 +1,14 @@
 import {ModAction} from "@devvit/protos";
 import {
+    BaseContext,
     Comment,
     Context,
+    ContextAPIClients,
     Data,
     Devvit,
     Form,
     FormOnSubmitEvent,
     MenuItemOnPressEvent,
-    OnTriggerEvent,
     Post,
     RedditAPIClient,
     SettingScope,
@@ -191,6 +192,8 @@ function parseSubredditString(value: string | undefined) {
                 value || ""
             )
                 .toLowerCase()
+                .replace(/ /g, "")
+                .replace(/r\//g, "")
                 .split("\n")
                 .map((s) => s.trim())
                 .filter((s) => s !== ""),
@@ -219,7 +222,7 @@ async function checkModPermissions(
     console.log(`Checking mod permissions for r/${otherSubreddit.name}`);
     const triggeringSubreddit = await context.reddit.getCurrentSubreddit();
     const triggeringMod = await context.reddit.getCurrentUser();
-    const moderators = await otherSubreddit.getModerators({username: triggeringMod.username}).all()
+    const moderators = await otherSubreddit.getModerators({username: triggeringMod?.username}).all()
     if (moderators.length < 1) {
         context.ui.showToast({
             appearance: "neutral",
@@ -259,46 +262,107 @@ function getContextLink(target: Comment | Post) {
         "_")[1]}`;
 }
 
-async function banFormOnSubmitHandler(event: FormOnSubmitEvent, context: Context) {
-    const {reddit, redis, ui, userId} = context;
-    const {additionalSubreddits, duration, reason, userMessage} = event.values;
-    let triggeringSubreddit = await reddit.getCurrentSubreddit()
-    let triggeringMod = await reddit.getCurrentUser()
-    const {targetId, location} = JSON.parse(await redis.get(`${userId}_context`) || "{}");
+async function resolveSubreddit(context: Context, subredditName: string) {
+    const {reddit, ui} = context;
+    try {
+        return await reddit.getSubredditByName(subredditName);
+    } catch (e) {
+        ui.showToast({
+            appearance: "neutral",
+            text: `Error fetching r/${subredditName}. It could be banned, private, or non-existent.`,
+        });
+    }
+}
 
-    let item: Comment | Post = location === "comment"
-        ? await reddit.getCommentById(targetId)
-        : await reddit.getPostById(targetId);
-    const targetUser: User = await reddit.getUserById(item.authorId || "")
-    if (!await checkModPermissions({context, otherSubreddit: triggeringSubreddit}))
-        return;
-    let subredditsToBanFrom: Promise<Subreddit>[] = parseSubredditString(`${triggeringSubreddit.name}\n${additionalSubreddits}`)
-        .map(subredditName => reddit.getSubredditByName(subredditName));
-    let subsBannedFrom = 0;
-    for (let otherSubreddit of await Promise.all(subredditsToBanFrom)) {
-        if (await checkModPermissions({context, otherSubreddit})) {
-            if (otherSubreddit.id === triggeringSubreddit.id || await canBanInSubreddit({context, otherSubreddit})) {
+async function banInSubreddit(
+    context: ContextAPIClients & BaseContext,
+    otherSubreddit: string,
+    triggeringSubreddit: Subreddit,
+    item: Comment | Post,
+    triggeringMod: User | undefined,
+    targetId: string,
+    duration: number,
+    userMessage: string,
+    reason: string,
+    targetUser: User | undefined,
+): Promise<number> {
+    const {ui} = context;
+    let subreddit: Subreddit | undefined = undefined;
+    try {
+        subreddit = await resolveSubreddit(context, otherSubreddit) as Subreddit;
+    } catch (e) {
+        console.error(`Error fetching r/${otherSubreddit}: ${e}`)
+        ui.showToast(
+            {
+                appearance: "neutral",
+                text: `Error fetching r/${otherSubreddit}`,
+            },
+        );
+    }
+    if (subreddit) {
+        if (await checkModPermissions({context, otherSubreddit: subreddit})) {
+            if (subreddit.id === triggeringSubreddit.id || await canBanInSubreddit({
+                context,
+                otherSubreddit: subreddit,
+            })) {
                 try {
-                    await otherSubreddit.banUser({
+                    await subreddit.banUser({
                         context: targetId,
                         duration: duration > 0 ? duration : undefined,
-                        message: replaceTokens(userMessage, item, otherSubreddit),
+                        message: replaceTokens(userMessage, item, subreddit),
                         note: reason,
-                        reason: `Mass ban by u/${triggeringMod.username} from r/${triggeringSubreddit.name} utilizing the BanHammerApp.`,
-                        username: targetUser.username,
+                        reason: `Mass ban by u/${triggeringMod?.username} from r/${triggeringSubreddit.name} utilizing the BanHammerApp.`,
+                        username: targetUser?.username || "",
                     });
-                    console.log(`Banned from r/${otherSubreddit.name}`)
-                    subsBannedFrom += 1
+                    console.log(`Banned from r/${subreddit.name}`)
+                    return 1;
                 } catch (e) {
-                    console.error(`Error banning from r/${otherSubreddit.name}: ${e}`)
+                    console.error(`Error banning from r/${subreddit.name}: ${e}`)
                     ui.showToast({
                         appearance: "neutral",
-                        text: `Error while banning from r/${otherSubreddit.name}`,
+                        text: `Error while banning from r/${subreddit.name}`,
                     });
                 }
             }
         }
     }
+    return 0;
+}
+
+async function banFormOnSubmitHandler(event: FormOnSubmitEvent, context: Context) {
+    const {reddit, redis, ui, userId} = context;
+    const {additionalSubreddits, duration, reason, userMessage} = event.values;
+    let triggeringSubreddit = await reddit.getCurrentSubreddit()
+    let triggeringMod: User | undefined = await reddit.getCurrentUser()
+    const {targetId, location} = JSON.parse(await redis.get(`${userId}_context`) || "{}");
+    let item: Comment | Post = location === "comment"
+        ? await reddit.getCommentById(targetId)
+        : await reddit.getPostById(targetId);
+    const targetUser: User | undefined = await reddit.getUserById(item.authorId || "")
+    if (!await checkModPermissions({context, otherSubreddit: triggeringSubreddit})) {
+        ui.showToast({
+            appearance: "neutral",
+            text: `You do not have permission to ban users in this subreddit!`,
+        })
+        return;
+    }
+    let subredditsToBanFrom: string[] = parseSubredditString(`${triggeringSubreddit.name}\n${additionalSubreddits}`);
+    let subsBannedFrom: number = (
+        await Promise.all(subredditsToBanFrom.map((otherSubreddit) => banInSubreddit(
+            context,
+            otherSubreddit,
+            triggeringSubreddit,
+            item,
+            triggeringMod,
+            targetId,
+            duration,
+            userMessage,
+            reason,
+            targetUser,
+        )))
+    )
+        .filter((banned) => banned > 0)
+        .reduce((a, b) => a + b, 0);
     ui.showToast({
         appearance: "success",
         text: `Banned from ${subsBannedFrom} subreddit${subsBannedFrom === 1 ? "" : "s"}`,
@@ -317,7 +381,7 @@ async function ensureWikiPage(reddit: RedditAPIClient, subreddit: Subreddit): Pr
     return await reddit.getWikiPage(subreddit.name, WIKI_PAGE);
 }
 
-async function onEventHandler(event: OnTriggerEvent<ModAction>, context: TriggerContext) {
+async function onEventHandler(event: ModAction, context: TriggerContext) {
     const {reddit, redis, settings} = context;
     if (await redis.get("wiki_update_required") === "false") {
         return;

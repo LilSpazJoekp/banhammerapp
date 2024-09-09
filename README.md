@@ -47,6 +47,11 @@ If you have any feedback or suggestions for BanHammer App, please contact my aut
 
 ## Changes
 
+### 1.0.3
+
+- Improve ban performance.
+- Improve error handling. Errors are now displayed if the subreddit you're trying to ban in is banned or not valid.
+
 ### 1.0.2
 
 - Fix issue where the app couldn't be setup.
