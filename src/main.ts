@@ -1,92 +1,194 @@
-import {ModAction} from "@devvit/protos";
+import {AppInstall, AppUpgrade} from "@devvit/protos";
 import {
-    BaseContext,
     Comment,
     Context,
-    ContextAPIClients,
-    Data,
     Devvit,
     Form,
     FormOnSubmitEvent,
+    JSONObject,
     MenuItemOnPressEvent,
     Post,
-    RedditAPIClient,
     SettingScope,
     SettingsFormFieldValidatorEvent,
-    Subreddit,
     TriggerContext,
     User,
-    WikiPage,
+    UserNoteLabel,
 } from "@devvit/public-api";
+import {
+    BanHammerSettingsKeys,
+    loadSubredditSettings,
+    parseFormField,
+    writeConfig,
+    writeConfigToWikiPage,
+} from "./config.js";
 
-const APP_SLUG: string = "banhammerapp";
-const WIKI_PAGE: string = "app_config/banhammerapp";
 
-interface BanHammerSettings {
-    allowlist: string[];
-    denylist: string[];
-    enableAllowlist: boolean;
-    lastUpdated: string
+Devvit.addSchedulerJob({
+    name: "syncConfig",
+    onRun: async (_event, context) => {
+        const {reddit, redis, settings} = context;
+        if (await redis.get("wikiUpdateRequired") === "false") {
+            return;
+        }
+        const subreddit = (
+            await reddit.getCurrentSubreddit()
+        ).name;
+
+        await writeConfigToWikiPage(
+            reddit,
+            {
+                banAllowList: parseFormField(await settings.get("banAllowList")) as string[],
+                banDenyList: parseFormField(await settings.get("banDenyList")) as string[],
+                enableBanAllowList: await settings.get("enableBanAllowList") || false,
+                enableNoteAllowList: await settings.get("enableNoteAllowList") || false,
+                noteAllowList: parseFormField(await settings.get("noteAllowList")) as string[],
+                noteDenyList: parseFormField(await settings.get("noteDenyList")) as string[],
+            },
+            subreddit,
+        );
+        await redis.set("wikiUpdateRequired", "false");
+    },
+});
+
+enum BanHammerAction {
+    Ban = "ban",
+    ModNote = "modNote",
 }
 
-interface otherSubredditCheckParams {
+type OtherSubredditCheckParams = {
+    action: BanHammerAction
     context: Context;
-    otherSubreddit: Subreddit;
+    otherSubreddit: string;
 }
 
 Devvit.configure({
     redditAPI: true,
     redis: true,
+    // modLog: true,
 });
 
 Devvit.addSettings([
-        {
-            helpText: "One subreddit per line, case-insensitive. Other subreddits to ban in by default. Will only ban in subreddits where BanHammer is installed and the invoking moderator is also a moderator.",
-            label: "Other Subreddits",
-            name: "otherSubreddits",
-            scope: SettingScope.Installation,
-            type: "paragraph",
-        },
+    {
+        defaultValue: false,
+        label: "Enable Global Redis",
+        name: "enableGlobalRedis",
+        scope: SettingScope.App,
+        type: "boolean",
+    },
+    {
+        defaultValue: false,
+        label: "Enable Mod Log Entry",
+        name: "enableModLogEntry",
+        scope: SettingScope.App,
+        type: "boolean",
+    },
+])
+
+Devvit.addSettings([
         {
             type: "group",
-            label: "Subreddit Allow List",
+            label: "Ban Settings",
             fields: [
                 {
-                    helpText: "If checked, ONLY the subreddits listed in the 'Allowed Subreddits' field will be able to ban users in this subreddit.",
-                    label: "Enable Allowlist?",
-                    name: "enableAllowlist",
+                    helpText: "One subreddit per line, case-insensitive. Other subreddits to ban in by default. Will only ban in subreddits where BanHammer is installed and the invoking moderator is also a moderator with the appropriate permissions.",
+                    label: "Default Ban Subreddits",
+                    name: "otherBanSubreddits",
                     scope: SettingScope.Installation,
-                    type: "boolean",
+                    type: "paragraph",
                 },
                 {
-                    helpText: "One subreddit per line, case-insensitive. ONLY these subreddits can ban users in this subreddit. Ignored if 'Enable Allowlist?` is disabled. Leave blank to deny all other subreddits.",
-                    label: "Allowed Subreddits",
-                    name: "subredditAllowlist",
+                    fields: [
+                        {
+                            ...validatedSetting("enableBanAllowList", "Enable Ban Allow List?"),
+                            helpText: "If checked, ONLY the subreddits listed in the 'Allowed Ban Subreddits' field will be able to ban users in this subreddit.",
+                            scope: SettingScope.Installation,
+                            type: "boolean",
+                        },
+                        {
+                            ...validatedSetting("banAllowList", "Allowed Ban Subreddits"),
+                            helpText: "One subreddit per line, case-insensitive. ONLY these subreddits can ban users in this subreddit. Ignored if 'Enable Ban Allow List?` is disabled. Leave blank to deny all other subreddits from banning users in this subreddit.",
+                            scope: SettingScope.Installation,
+                            type: "paragraph",
+                        },
+                    ],
+                    label: "Subreddit Ban Allow List",
+                    type: "group",
+                },
+                {
+                    ...validatedSetting("banDenyList", "Denied Ban Subreddits"),
+                    helpText: "One subreddit per line, case-insensitive. A list of subreddits that are not allowed to ban users in this subreddit. Ignored if 'Enable Ban Allow List?` is enabled.",
+                    scope: SettingScope.Installation,
+                    type: "paragraph",
+                },
+                {
+                    helpText: "Default message to user. Supports placeholders. See app directory page for placeholder details.",
+                    label: "Default User Message",
+                    name: "defaultUserMessage",
                     scope: SettingScope.Installation,
                     type: "paragraph",
                 },
             ],
         },
         {
-            helpText: "One subreddit per line, case-insensitive. A list of subreddits that are not allowed to ban users in this subreddit. Ignored if 'Enable Allowlist?` is enabled.",
-            label: "Denied Subreddits",
-            name: "subredditDenylist",
-            scope: SettingScope.Installation,
-            type: "paragraph",
-            onValidate: validateSetting,
-        },
-        {
-            helpText: "Default message to user. See app directory page for placeholder details.",
-            label: "Default User Message",
-            name: "defaultUserMessage",
-            scope: SettingScope.Installation,
-            type: "paragraph",
+            fields: [
+                {
+                    helpText: "One subreddit per line, case-insensitive. Other subreddits to add mod notes in by default. Will only add mod notes in subreddits where BanHammer is installed and the invoking moderator is also a moderator with the appropriate permissions.",
+                    label: "Default Mod Note Subreddits",
+                    name: "otherNoteSubreddits",
+                    scope: SettingScope.Installation,
+                    type: "paragraph",
+                },
+                {
+                    fields: [
+                        {
+                            ...validatedSetting("enableNoteAllowList", "Enable Mod Note Allow List?"),
+                            helpText: "If checked, ONLY the subreddits listed in the 'Allowed Mod Note Subreddits' field will be able to add mod notes to users in this subreddit.",
+                            scope: SettingScope.Installation,
+                            type: "boolean",
+                        },
+                        {
+                            ...validatedSetting("noteAllowList", "Allowed Mod Note Subreddits"),
+                            helpText: "One subreddit per line, case-insensitive. ONLY these subreddits can add mod notes to users in this subreddit. Ignored if 'Enable Mod Note Allow List?` is disabled. Leave blank to deny all other subreddits from adding mod notes in this subreddit.",
+                            scope: SettingScope.Installation,
+                            type: "paragraph",
+                        },
+                    ],
+                    label: "Subreddit Mod Note Allow List",
+                    type: "group",
+                },
+                {
+                    ...validatedSetting("noteDenyList", "Denied Mod Note Subreddits"),
+                    helpText: "One subreddit per line, case-insensitive. A list of subreddits that are not allowed to add mod notes to users in this subreddit. Ignored if 'Enable Mod Note Allow List?` is enabled.",
+                    scope: SettingScope.Installation,
+                    type: "paragraph",
+                },
+                {
+                    defaultValue: ["ABUSE_WARNING"],
+                    helpText: "Default Mod Note label.",
+                    label: "Default Mod Note Label",
+                    name: "defaultModNoteLabel",
+                    options: [
+                        {label: "Abuse Warning", value: "ABUSE_WARNING"},
+                        {label: "Spam Warning", value: "SPAM_WARNING"},
+                        {label: "Spam Watch", value: "SPAM_WATCH"},
+                        {label: "Solid Contributor", value: "SOLID_CONTRIBUTOR"},
+                        {label: "Helpful User", value: "HELPFUL_USER"},
+                        {label: "Ban", value: "BAN"},
+                        {label: "Bot Ban", value: "BOT_BAN"},
+                        {label: "Perma Ban", value: "PERMA_BAN"},
+                    ],
+                    scope: SettingScope.Installation,
+                    type: "select",
+                },
+            ],
+            label: "Mod Note Settings",
+            type: "group",
         },
     ],
 );
 
 Devvit.addTrigger({
-    event: "ModAction",
+    events: ["AppInstall", "AppUpgrade"],
     onEvent: onEventHandler,
 });
 
@@ -98,160 +200,288 @@ Devvit.addMenuItem({
 });
 
 const banForm = Devvit.createForm(
-    generateBanForm,
+    generateActionForm,
     banFormOnSubmitHandler,
 );
 
-
 async function onPressHandler(event: MenuItemOnPressEvent, context: Context) {
     const {redis, settings, ui, userId} = context;
-    await redis.set(`${userId}_context`, JSON.stringify(event))
+    await redis.set(`${userId}_context`, JSON.stringify(event));
     ui.showForm(
         banForm,
         {
-            defaultUserMessage: await settings.get("defaultUserMessage") || "",
-            subreddits: await settings.get("otherSubreddits") || "",
+            banUser: true,
+            modNoteLabel: await settings.get("defaultModNoteLabel") || "ABUSE_WARNING",
+            userMessage: await settings.get("defaultUserMessage") || "",
+            banSubreddits: await settings.get("otherBanSubreddits") || "",
+            noteSubreddits: await settings.get("otherNoteSubreddits") || "",
         },
-    )
+    );
 }
 
-function replaceTokens(message: string, banItem: Comment | Post, remoteSubreddit: Subreddit): string {
+function replaceTokens(message: string, banItem: Comment | Post, remoteSubreddit: string): string {
     return message
         .replace("{{author}}", banItem.authorName)
         .replace("{{kind}}", banItem instanceof Comment ? "comment" : "post")
         .replace("{{originSubreddit}}", banItem.subredditName)
-        .replace("{{subreddit}}", remoteSubreddit.name)
+        .replace("{{subreddit}}", remoteSubreddit)
         .replace("{{url}}", getContextLink(banItem));
 }
 
-function generateBanForm(data: Data): Form {
-    let {defaultUserMessage, subreddits} = data;
+function generateActionForm(data: JSONObject): Form {
     return {
         fields: [
             {
-                defaultValue: 0,
-                helpText: "Duration in days. 0 for permanent.",
-                label: "Duration",
-                name: "duration",
-                required: true,
-                type: "number",
+                "type": "group",
+                label: "Ban",
+                "fields": [
+                    {
+                        defaultValue: data.banUser as boolean || false,
+                        helpText: "Toggle to ban the user in the specified subreddit(s).",
+                        label: "Ban User?",
+                        name: "banUser",
+                        type: "boolean",
+                    },
+                    {
+                        defaultValue: data.duration as number || 0,
+                        helpText: "Duration in days. 0 for permanent.",
+                        label: "Duration",
+                        name: "duration",
+                        required: true,
+                        type: "number",
+                    },
+                    {
+                        defaultValue: data.reason as string || "",
+                        helpText: "Additional details or reason for the ban. Will not be sent to the user.",
+                        label: "Additional Info/Ban Mod Note",
+                        name: "reason",
+                        required: false,
+                        type: "string",
+                    },
+                    {
+                        defaultValue: data.userMessage as string || "",
+                        helpText: "Message to send to user.",
+                        label: "User Message",
+                        name: "userMessage",
+                        type: "paragraph",
+                    },
+                    {
+                        defaultValue: data.banSubreddits as string || "",
+                        helpText: "Additional subreddits to ban in. Leave blank to only ban in the current subreddit. One subreddit per line, case-insensitive.",
+                        label: "Additional Ban Subreddits",
+                        name: "banSubreddits",
+                        type: "paragraph",
+                    },
+                ],
             },
             {
-                helpText: "Additional details or reason for the ban. Will not be sent to the user.",
-                label: "Additional Info/Mod Note",
-                name: "reason",
-                required: false,
-                type: "string",
-            },
-            {
-                defaultValue: defaultUserMessage || "",
-                helpText: "Message to send to user.",
-                label: "User Message",
-                name: "userMessage",
-                type: "paragraph",
-            },
-            {
-                defaultValue: subreddits || "",
-                helpText: "Additional subreddits to ban in. Leave blank to only ban in the current subreddit. One subreddit per line, case-insensitive.",
-                label: "Additional Subreddits",
-                name: "additionalSubreddits",
-                type: "paragraph",
+                type: "group",
+                label: "Mod Note",
+                fields: [
+                    {
+                        defaultValue: data.addNote as boolean || false,
+                        helpText: "Toggle to add a mod note for the user in the specified subreddit(s).",
+                        label: "Add Mod Note?",
+                        name: "addNote",
+                        type: "boolean",
+                    },
+                    {
+                        defaultValue: data.modNoteLabel as string[],
+                        label: "Mod Note Label",
+                        name: "modNoteLabel",
+                        type: "select",
+                        options: [
+                            {label: "Abuse Warning", value: "ABUSE_WARNING"},
+                            {label: "Spam Warning", value: "SPAM_WARNING"},
+                            {label: "Spam Watch", value: "SPAM_WATCH"},
+                            {label: "Solid Contributor", value: "SOLID_CONTRIBUTOR"},
+                            {label: "Helpful User", value: "HELPFUL_USER"},
+                            {label: "Ban", value: "BAN"},
+                            {label: "Bot Ban", value: "BOT_BAN"},
+                            {label: "Perma Ban", value: "PERMA_BAN"},
+                        ],
+                    },
+                    {
+                        defaultValue: data.note as string || "",
+                        label: "Mod Note",
+                        name: "note",
+                        type: "paragraph",
+                    },
+                    {
+                        defaultValue: data.noteSubreddits as string || "",
+                        helpText: "Additional subreddits to add a mod note in. Leave blank to only add a mod note in the current subreddit. Ignored if 'Add Mod Note?' is disabled. One subreddit per line, case-insensitive.",
+                        label: "Additional Mod Note Subreddits",
+                        name: "noteSubreddits",
+                        type: "paragraph",
+                    },
+                ],
             },
         ],
-        title: "Ban User",
+        title: "BanHammer User",
     };
 }
 
-function filterWikiPageComment(content: string) {
-    return content.split("\n").filter((line) => !line.startsWith("#")).join("\n");
-}
-
-function loadSubredditSettings(wikiPage: WikiPage): BanHammerSettings {
-    console.log(`Loading settings for r/${wikiPage.subredditName}`)
-    return JSON.parse(
-        filterWikiPageComment(wikiPage.content)
-        || '{"allowlist":[],"denylist":[],"enableAllowlist":false,"lastUpdated":""}');
-}
-
-async function writeConfigToWikiPage(wikiPage: WikiPage, settings: BanHammerSettings) {
-    await wikiPage.update(
-        `# BanHammer Configuration
-# This page is used to store the configuration for the BanHammer app.
-# Do not edit this page manually, edit the settings for BanHammer [here](https://developers.reddit.com/r/${(
-            wikiPage.subredditName
-        )}/apps/${APP_SLUG}) instead.\n${(
-            JSON.stringify(settings)
-        )}`,
-        `Updated settings for BanHammer`,
-    );
-}
-
-function parseSubredditString(value: string | undefined) {
-    return Array.from(
-        new Set((
-                value || ""
-            )
-                .toLowerCase()
-                .replace(/ /g, "")
-                .replace(/r\//g, "")
-                .split("\n")
-                .map((s) => s.trim())
-                .filter((s) => s !== ""),
-        ),
-    );
-}
-
-async function validateSetting(
-    _: SettingsFormFieldValidatorEvent<string>,
-    context: Context,
-) {
-    const {reddit, redis} = context;
-    // await context.modLog.add({action: "dev_platform_app_changed", details: "Updated BanHammer settings"});
-    const subreddit = await reddit.getCurrentSubreddit();
-    const wikiPage = await ensureWikiPage(reddit, subreddit);
-    await redis.set("wiki_update_required", "true");
-    await writeConfigToWikiPage(
-        wikiPage,
-        {allowlist: [], denylist: [], enableAllowlist: false, lastUpdated: new Date().toISOString()},
-    );
+function validatedSetting(field: BanHammerSettingsKeys, display_name: string): {
+    label: string,
+    name: BanHammerSettingsKeys;
+    onValidate: (event: SettingsFormFieldValidatorEvent<string | boolean>, context: Context) => Promise<void>
+} {
+    let validator = async (
+        event: SettingsFormFieldValidatorEvent<string | boolean>,
+        context: Context,
+    ) => {
+        const {modLog, reddit, redis, subredditName, settings} = context;
+        const subreddit = subredditName ? subredditName : (
+            await reddit.getCurrentSubreddit()
+        ).name;
+        const useGlobalRedis: boolean = await settings.get("enableGlobalRedis") === "true" || false;
+        let currentSetting: string | boolean | string[];
+        const currentSettings = await loadSubredditSettings(context, subreddit);
+        if (useGlobalRedis) {
+            console.log(`display_name: ${display_name} useGlobalRedis: ${useGlobalRedis} ${typeof useGlobalRedis}`);
+            currentSetting = JSON.parse(await redis.global.hGet(subreddit, field) || "\"Not Set\"");
+        } else {
+            currentSetting = currentSettings[field] || "Not Set";
+        }
+        const changeStrings: string[] = [];
+        console.log(`${field}: ${JSON.stringify(event, null, 2)}`);
+        if (typeof event.value === "boolean") {
+            if (currentSetting === event.value) {
+                return;
+            }
+            changeStrings.push(`${currentSetting ? "enabled" : "disabled"} -> ${event.value ? "enabled" : "disabled"}`);
+        } else {
+            const currentSet: Set<string> = new Set<string>(currentSetting === "Not Set"
+                ? []
+                : currentSetting as string[]);
+            const newSet: Set<string> = new Set<string>((
+                parseFormField(event.value as (boolean | string | undefined)) as string[]
+            ));
+            const added = [...newSet].filter((value) => !currentSet.has(value));
+            const removed = [...currentSet].filter((value) => !newSet.has(value));
+            if (currentSet.size === newSet.size && [...currentSet].every((value) => newSet.has(value))) {
+                return;
+            }
+            if (added.length > 0) {
+                changeStrings.push(`Added: ${humanList(added)}`);
+            }
+            if (removed.length > 0) {
+                changeStrings.push(`Removed: ${humanList(removed)}`);
+            }
+        }
+        // @ts-ignore
+        currentSettings[field] = parseFormField(event.value as (boolean | string | undefined));
+        await writeConfig(
+            context,
+            subreddit,
+            {
+                [field]: parseFormField(event.value as (boolean | string | undefined)),
+            },
+            useGlobalRedis,
+        );
+        if (await settings.get("enableModLogEntry") === "true") {
+            await modLog.add({
+                action: "dev_platform_app_changed",
+                details: `Updated BanHammer setting "${display_name}": ${changeStrings.join(" and ")}`,
+            });
+        }
+        console.log(`Updated Setting "${display_name}": ${changeStrings.join(" and ")}`);
+    };
+    return {label: display_name, name: field, onValidate: validator};
 }
 
 async function checkModPermissions(
-    {context, otherSubreddit}: otherSubredditCheckParams,
+    {action, context, otherSubreddit}: OtherSubredditCheckParams,
 ): Promise<boolean> {
-    console.log(`Checking mod permissions for r/${otherSubreddit.name}`);
-    const triggeringSubreddit = await context.reddit.getCurrentSubreddit();
-    const triggeringMod = await context.reddit.getCurrentUser();
-    const moderators = await otherSubreddit.getModerators({username: triggeringMod?.username}).all()
+    let actionName = action === BanHammerAction.Ban ? "ban" : "add mod note for";
+    console.log(`Checking mod permissions to ${actionName} for r/${otherSubreddit}`);
+    const triggeringSubreddit = (
+        await context.reddit.getCurrentSubreddit()
+    ).name;
+    const triggeringMod: User | undefined = await context.reddit.getCurrentUser();
+    const moderators: User[] = await context.reddit.getModerators({
+        subredditName: otherSubreddit,
+        username: triggeringMod?.username,
+    }).all();
+    let allowed = true;
     if (moderators.length < 1) {
+        allowed = false;
+    }
+    let permissions = await moderators[0].getModPermissionsForSubreddit(otherSubreddit);
+    if (allowed && !(
+        permissions.includes("all") ||
+        permissions.includes("access")
+    )) {
+        allowed = false;
+    }
+    if (!allowed) {
         context.ui.showToast({
             appearance: "neutral",
-            text: `You do not have permission to ban users${otherSubreddit.id !== triggeringSubreddit.id ? ` in r/${(
-                otherSubreddit.name
-            )}` : ""}!`,
+            text: `You do not have permission to ${actionName} users${otherSubreddit !== triggeringSubreddit
+                ? ` in r/${(
+                    otherSubreddit
+                )}`
+                : ""}!`,
         });
-        return false
     }
-    return true;
+    return allowed;
 }
 
-async function canBanInSubreddit(
-    {context, otherSubreddit}: otherSubredditCheckParams,
+async function canActionInSubreddit(
+    {action, context, otherSubreddit}: OtherSubredditCheckParams,
 ): Promise<boolean> {
-    console.log(`Checking if app can ban in r/${otherSubreddit.name}`)
-    let appUser = await context.reddit.getAppUser();
-    let moderators = await otherSubreddit.getModerators({username: appUser.username}).all()
+    let actionName = action === BanHammerAction.Ban ? "ban" : "add mod note";
+    console.log(`Checking if app can ${actionName} in r/${otherSubreddit}`);
+    const {reddit, subredditName} = context;
+    let appUser = await reddit.getAppUser();
+    let moderators = await reddit.getModerators({subredditName: otherSubreddit, username: appUser.username}).all();
     if (moderators.length === 0)
-        return false
+        return false;
+    let permissions = await moderators[0].getModPermissionsForSubreddit(otherSubreddit);
+    if (!(
+        permissions.includes("all") || permissions.includes("access")
+    ))
+        return false;
     const currentSubredditName = (
-        await context.reddit.getCurrentSubreddit()
-    ).name.toLowerCase();
-    const wikiPage = await context.reddit.getWikiPage(otherSubreddit.name, WIKI_PAGE);
-    const {allowlist, denylist, enableAllowlist} = loadSubredditSettings(wikiPage);
-    console.log(`Checking if app can ban in r/${otherSubreddit.name} from r/${currentSubredditName} with allowlist ${allowlist} and denylist ${denylist}`)
-    return enableAllowlist
-        ? new Set(allowlist).has(currentSubredditName)
-        : !new Set(denylist).has(currentSubredditName);
+        subredditName || ""
+    );
+    const {
+        banAllowList,
+        banDenyList,
+        enableBanAllowList,
+        enableNoteAllowList,
+        noteAllowList,
+        noteDenyList,
+    } = await loadSubredditSettings(context, otherSubreddit);
+    let allowed = false;
+    if (action === BanHammerAction.Ban) {
+        console.log(`Checking if app can ${actionName} in r/${otherSubreddit} from r/${currentSubredditName} with allow list ${banAllowList
+        || "[]"} and deny list ${banDenyList || "[]"}`);
+        allowed = enableBanAllowList
+            ? new Set(banAllowList).has(currentSubredditName.toLowerCase())
+            : !new Set(banDenyList).has(currentSubredditName.toLowerCase());
+    } else if (action === BanHammerAction.ModNote) {
+        console.log(`Checking if app can ${actionName} in r/${otherSubreddit} from r/${currentSubredditName} with allow list ${noteAllowList
+        || "[]"} and deny list ${noteDenyList || "[]"}`);
+        allowed = enableNoteAllowList
+            ? new Set(noteAllowList).has(currentSubredditName.toLowerCase())
+            : !new Set(noteDenyList).has(currentSubredditName.toLowerCase());
+    }
+    return allowed;
+}
+
+function humanList(items: string[]): string {
+    if (items.length === 0) {
+        return "";
+    }
+    if (items.length === 1) {
+        return items[0];
+    }
+    let workingItems = items.slice();
+    const last = workingItems.pop();
+    return workingItems.filter((value) => value.length > 0).join(", ") + (
+        workingItems.length > 1 ? ", and " : " and "
+    ) + last;
 }
 
 function getContextLink(target: Comment | Post) {
@@ -262,22 +492,25 @@ function getContextLink(target: Comment | Post) {
         "_")[1]}`;
 }
 
-async function resolveSubreddit(context: Context, subredditName: string) {
+async function resolveSubreddit(context: Context, subredditName: string): Promise<string> {
     const {reddit, ui} = context;
     try {
-        return await reddit.getSubredditByName(subredditName);
+        return (
+            await reddit.getSubredditInfoByName(subredditName)
+        ).name as string;
     } catch (e) {
         ui.showToast({
             appearance: "neutral",
             text: `Error fetching r/${subredditName}. It could be banned, private, or non-existent.`,
         });
     }
+    return "";
 }
 
 async function banInSubreddit(
-    context: ContextAPIClients & BaseContext,
-    otherSubreddit: string,
-    triggeringSubreddit: Subreddit,
+    context: Context,
+    subreddit: string,
+    triggeringSubreddit: string,
     item: Comment | Post,
     triggeringMod: User | undefined,
     targetId: string,
@@ -286,124 +519,262 @@ async function banInSubreddit(
     reason: string,
     targetUser: User | undefined,
 ): Promise<number> {
-    const {ui} = context;
-    let subreddit: Subreddit | undefined = undefined;
-    try {
-        subreddit = await resolveSubreddit(context, otherSubreddit) as Subreddit;
-    } catch (e) {
-        console.error(`Error fetching r/${otherSubreddit}: ${e}`)
-        ui.showToast(
-            {
-                appearance: "neutral",
-                text: `Error fetching r/${otherSubreddit}`,
-            },
-        );
-    }
-    if (subreddit) {
-        if (await checkModPermissions({context, otherSubreddit: subreddit})) {
-            if (subreddit.id === triggeringSubreddit.id || await canBanInSubreddit({
-                context,
-                otherSubreddit: subreddit,
-            })) {
-                try {
-                    await subreddit.banUser({
-                        context: targetId,
-                        duration: duration > 0 ? duration : undefined,
-                        message: replaceTokens(userMessage, item, subreddit),
-                        note: reason,
-                        reason: `Mass ban by u/${triggeringMod?.username} from r/${triggeringSubreddit.name} utilizing the BanHammerApp.`,
-                        username: targetUser?.username || "",
-                    });
-                    console.log(`Banned from r/${subreddit.name}`)
-                    return 1;
-                } catch (e) {
-                    console.error(`Error banning from r/${subreddit.name}: ${e}`)
-                    ui.showToast({
-                        appearance: "neutral",
-                        text: `Error while banning from r/${subreddit.name}`,
-                    });
-                }
+    const {reddit, ui} = context;
+    if (await checkModPermissions({action: BanHammerAction.Ban, context, otherSubreddit: subreddit})) {
+        if (subreddit === triggeringSubreddit || await canActionInSubreddit({
+            action: BanHammerAction.Ban,
+            context,
+            otherSubreddit: subreddit,
+        })) {
+            try {
+                await reddit.banUser({
+                    context: targetId,
+                    duration: duration > 0 ? duration : undefined,
+                    message: replaceTokens(userMessage, item, subreddit),
+                    note: reason,
+                    reason: `Mass ban by u/${triggeringMod?.username} from r/${triggeringSubreddit} utilizing the BanHammerApp.`,
+                    subredditName: subreddit,
+                    username: targetUser?.username || "",
+                });
+                console.log(`Banned from r/${subreddit}`)
+                return 1;
+            } catch (e) {
+                console.error(`Error banning from r/${subreddit}: ${e}`)
+                ui.showToast({
+                    appearance: "neutral",
+                    text: `Error while banning from r/${subreddit}`,
+                });
             }
         }
     }
     return 0;
 }
 
-async function banFormOnSubmitHandler(event: FormOnSubmitEvent, context: Context) {
+async function addModNote(
+    otherSubreddit: string,
+    triggeringSubreddit: string,
+    context: Context,
+    event: FormOnSubmitEvent<JSONObject>,
+    label: string,
+    item: Comment | Post,
+    targetUser: User | undefined,
+): Promise<number> {
+    const {reddit, ui} = context;
+    if (await checkModPermissions({action: BanHammerAction.ModNote, context, otherSubreddit})) {
+        const inRemoteSubreddit = otherSubreddit === triggeringSubreddit;
+        if (inRemoteSubreddit || await canActionInSubreddit({
+            action: BanHammerAction.ModNote,
+            context,
+            otherSubreddit,
+        })) {
+            try {
+                console.log(`note: ${event.values.note}`);
+                await reddit.addModNote({
+                    label: label as UserNoteLabel,
+                    note: replaceTokens(event.values.note + (
+                        inRemoteSubreddit
+                            ? ""
+                            : "\nSubmitted Content: {{url}}"
+                    ), item, otherSubreddit),
+                    subreddit: otherSubreddit,
+                    user: targetUser?.username as string,
+                    redditId: inRemoteSubreddit ? item.id : undefined,
+                });
+                console.log(`Added mod note in r/${otherSubreddit}`);
+                return 1;
+            } catch (e) {
+                console.error(`Error adding mod note in r/${triggeringSubreddit}: ${e}`)
+                ui.showToast({
+                    appearance: "neutral",
+                    text: `Error adding mod note in r/${triggeringSubreddit}`,
+                });
+            }
+        }
+    }
+    return 0;
+}
+
+async function banFormOnSubmitHandler(event: FormOnSubmitEvent<JSONObject>, context: Context) {
     const {reddit, redis, ui, userId} = context;
-    const {additionalSubreddits, duration, reason, userMessage} = event.values;
-    let triggeringSubreddit = await reddit.getCurrentSubreddit()
-    let triggeringMod: User | undefined = await reddit.getCurrentUser()
+    const label = (
+        event.values.modNoteLabel as string[]
+    )[0];
+    if (!event.values.banUser && !event.values.addNote) {
+        ui.showToast({
+            appearance: "neutral",
+            text: "Nothing to do!",
+        });
+        return;
+    }
+    if (event.values.addNote && !event.values.note) {
+        ui.showToast({
+            appearance: "neutral",
+            text: "'Mod Note' is required if 'Add Mod Note?' is enabled!",
+        });
+        ui.showForm(
+            banForm,
+            {
+                addNote: event.values.addNote,
+                banSubreddits: event.values.banSubreddits,
+                banUser: event.values.banUser,
+                duration: event.values.duration,
+                modNoteLabel: event.values.modNoteLabel,
+                note: event.values.note,
+                noteSubreddits: event.values.noteSubreddits,
+                reason: event.values.reason,
+                userMessage: event.values.userMessage,
+            },
+        );
+        return;
+    }
+
+    let triggeringSubreddit = (
+        await reddit.getCurrentSubreddit()
+    ).name;
+    let triggeringMod: User | undefined = await reddit.getCurrentUser();
     const {targetId, location} = JSON.parse(await redis.get(`${userId}_context`) || "{}");
+
     let item: Comment | Post = location === "comment"
         ? await reddit.getCommentById(targetId)
         : await reddit.getPostById(targetId);
     const targetUser: User | undefined = await reddit.getUserById(item.authorId || "")
-    if (!await checkModPermissions({context, otherSubreddit: triggeringSubreddit})) {
-        ui.showToast({
-            appearance: "neutral",
-            text: `You do not have permission to ban users in this subreddit!`,
-        })
-        return;
-    }
-    let subredditsToBanFrom: string[] = parseSubredditString(`${triggeringSubreddit.name}\n${additionalSubreddits}`);
-    let subsBannedFrom: number = (
-        await Promise.all(subredditsToBanFrom.map((otherSubreddit) => banInSubreddit(
-            context,
-            otherSubreddit,
-            triggeringSubreddit,
-            item,
-            triggeringMod,
-            targetId,
-            duration,
-            userMessage,
-            reason,
-            targetUser,
-        )))
-    )
-        .filter((banned) => banned > 0)
-        .reduce((a, b) => a + b, 0);
-    ui.showToast({
-        appearance: "success",
-        text: `Banned from ${subsBannedFrom} subreddit${subsBannedFrom === 1 ? "" : "s"}`,
-    });
-}
-
-async function ensureWikiPage(reddit: RedditAPIClient, subreddit: Subreddit): Promise<WikiPage> {
-    try {
-        return await reddit.createWikiPage({
-            subredditName: subreddit.name,
-            page: WIKI_PAGE,
-            content: '{"allowlist":[],"denylist":[],"enableAllowlist":false,"lastUpdated":""}',
-        });
-    } catch (e) {
-    }
-    return await reddit.getWikiPage(subreddit.name, WIKI_PAGE);
-}
-
-async function onEventHandler(event: ModAction, context: TriggerContext) {
-    const {reddit, redis, settings} = context;
-    if (await redis.get("wiki_update_required") === "false") {
-        return;
-    }
-    const appUser = await reddit.getAppUser();
-    const {action, moderator} = event;
-    if (action !== "wikirevise" || moderator?.name !== appUser.username) {
-        return;
-    }
-    const subreddit = await reddit.getCurrentSubreddit();
-    const wikiPage = await ensureWikiPage(reddit, subreddit);
-    await redis.set("wiki_update_required", "false");
-    await writeConfigToWikiPage(
-        wikiPage,
-        {
-            allowlist: parseSubredditString(await settings.get("subredditAllowlist")),
-            denylist: parseSubredditString(await settings.get("subredditDenylist")),
-            enableAllowlist: await settings.get("enableAllowlist") || false,
-            lastUpdated: new Date().toISOString(),
-        },
+    let subredditsToBan: string[] = (
+        parseFormField(triggeringSubreddit + (
+            event.values.banSubreddits || false ? `\n${(
+                event.values.banSubreddits
+            )}` : ""
+        )) as string[]
     );
+    let subredditsToModNote: string[] = (
+        parseFormField(triggeringSubreddit + (
+            event.values.noteSubreddits || false ? `\n${(
+                event.values.noteSubreddits
+            )}` : ""
+        )) as string[]
+    );
+    const resolvedSubreddits: Map<string, string> = new Map<string, string>(await Promise.all(
+        Array.from(new Set<string>(subredditsToBan.concat(subredditsToModNote)))
+            .map(async (value) => (
+                [value, await resolveSubreddit(context, value)] as [string, string]
+            )),
+    ));
+    let subsNotedIn: number = 0;
+    let subsBannedFrom: number = 0;
+    if (event.values.banUser) {
+        subsBannedFrom = (
+            await Promise.all(
+                subredditsToBan.map((value) => resolvedSubreddits.get(value) || "")
+                    .filter((value) => value !== "")
+                    .map((otherSubreddit) => banInSubreddit(
+                        context,
+                        otherSubreddit,
+                        triggeringSubreddit,
+                        item,
+                        triggeringMod,
+                        targetId,
+                        event.values.duration as number,
+                        event.values.userMessage as string,
+                        event.values.reason as string,
+                        targetUser,
+                    )))
+        )
+            .filter((banned) => banned > 0)
+            .reduce((a, b) => a + b, 0);
+    }
+    if (event.values.addNote) {
+        subsNotedIn = (
+            await Promise.all(
+                subredditsToModNote.map((value) => resolvedSubreddits.get(value) || "")
+                    .filter((value) => value !== "")
+                    .map((otherSubreddit) => addModNote(
+                        otherSubreddit,
+                        triggeringSubreddit,
+                        context,
+                        event,
+                        label,
+                        item,
+                        targetUser,
+                    )))
+        )
+            .filter((noted) => noted > 0)
+            .reduce((a, b) => a + b, 0);
+    }
+    if (event.values.banUser)
+        ui.showToast({
+            appearance: "success",
+            text: `Banned from ${subsBannedFrom} subreddit${subsBannedFrom === 1 ? "" : "s"}`,
+        });
+    if (event.values.addNote)
+        ui.showToast({
+            appearance: "success",
+            text: `Added mod note in ${subsNotedIn} subreddit${subsNotedIn === 1 ? "" : "s"}`,
+        });
 }
+
+// async function onEventHandler(
+//     event: ModAction | AppInstall | AppUpgrade,
+//     context: TriggerContext,
+// ) {
+//     const {reddit, redis, settings, subredditName} = context;
+//     // console.log("Handling event", event);
+//     if ((
+//         await redis.get("wiki_update_required") || "false"
+//     ) === "false") {
+//         return;
+//     }
+//     console.log("Updating wiki page");
+//     // @ts-ignore
+//     if (event.type == "ModAction") {
+//         const {action, moderator} = event as ModAction;
+//         // if (action !== "dev_platform_app_changed" || moderator?.name !== appUser.username) {
+//         if ((
+//             action !== "wikirevise" && action !== "dev_platform_app_changed"
+//         ) || moderator?.name !== (
+//             await reddit.getAppUser()
+//         ).username) {
+//             return;
+//         }
+//     }
+//     const subreddit = subredditName ? subredditName : (
+//         await reddit.getCurrentSubreddit()
+//     ).name;
+//     await writeConfig(
+//         reddit,
+//         redis,
+//         subreddit,
+//         {
+//             banAllowList: parseFormField(await settings.get("banAllowList")) as string[],
+//             banDenyList: parseFormField(await settings.get("banDenyList")) as string[],
+//             enableBanAllowList: await settings.get("enableBanAllowList") || false,
+//             enableNoteAllowList: await settings.get("enableNoteAllowList") || false,
+//             noteAllowList: parseFormField(await settings.get("noteAllowList")) as string[],
+//             noteDenyList: parseFormField(await settings.get("noteDenyList")) as string[],
+//         },
+//         await settings.get("enableGlobalRedis") === "true" || false,
+//     );
+// }
+
+async function onEventHandler(
+    _event: AppInstall | AppUpgrade,
+    context: TriggerContext,
+) {
+    const {scheduler, settings} = context;
+    if ((
+        await settings.get("enableGlobalRedis") === "false"
+    )) {
+        (
+            await scheduler.listJobs()
+        ).map(async (job) => {
+            await scheduler.cancelJob(job.id);
+        });
+        await scheduler.runJob({
+            name: "syncConfig",
+            cron: "* * * * * *",
+        });
+    }
+
+}
+
 
 // noinspection JSUnusedGlobalSymbols
 export default Devvit;
