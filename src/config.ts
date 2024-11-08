@@ -3,9 +3,9 @@ import {Context, RedditAPIClient, WikiPage} from "@devvit/public-api";
 const WIKI_PAGE: string = "app_config/banhammerapp";
 
 export type BanHammerSettings = {
-    banAllowList: string[];
-    banDenyList: string[];
-    enableBanAllowList: boolean;
+    subredditAllowList: string[];
+    subredditDenyList: string[];
+    enableAllowlist: boolean;
     enableNoteAllowList: boolean;
     noteAllowList: string[];
     noteDenyList: string[];
@@ -23,9 +23,9 @@ export async function loadSubredditSettings(context: Context, subreddit: string)
     }
     const data: Record<string, string> = await context.redis.global.hGetAll(subreddit) || {};
     const settings: BanHammerSettings = {
-        banAllowList: [],
-        banDenyList: [],
-        enableBanAllowList: false,
+        subredditAllowList: [],
+        subredditDenyList: [],
+        enableAllowlist: false,
         enableNoteAllowList: false,
         noteAllowList: [],
         noteDenyList: [],

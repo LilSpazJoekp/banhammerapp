@@ -37,9 +37,9 @@ Devvit.addSchedulerJob({
         await writeConfigToWikiPage(
             reddit,
             {
-                banAllowList: parseFormField(await settings.get("banAllowList")) as string[],
-                banDenyList: parseFormField(await settings.get("banDenyList")) as string[],
-                enableBanAllowList: await settings.get("enableBanAllowList") || false,
+                subredditAllowList: parseFormField(await settings.get("subredditAllowList")) as string[],
+                subredditDenyList: parseFormField(await settings.get("subredditDenyList")) as string[],
+                enableAllowlist: await settings.get("enableAllowlist") || false,
                 enableNoteAllowList: await settings.get("enableNoteAllowList") || false,
                 noteAllowList: parseFormField(await settings.get("noteAllowList")) as string[],
                 noteDenyList: parseFormField(await settings.get("noteDenyList")) as string[],
@@ -92,20 +92,20 @@ Devvit.addSettings([
                 {
                     helpText: "One subreddit per line, case-insensitive. Other subreddits to ban in by default. Will only ban in subreddits where BanHammer is installed and the invoking moderator is also a moderator with the appropriate permissions.",
                     label: "Default Ban Subreddits",
-                    name: "otherBanSubreddits",
+                    name: "otherSubreddits",
                     scope: SettingScope.Installation,
                     type: "paragraph",
                 },
                 {
                     fields: [
                         {
-                            ...validatedSetting("enableBanAllowList", "Enable Ban Allow List?"),
+                            ...validatedSetting("enableAllowlist", "Enable Ban Allow List?"),
                             helpText: "If checked, ONLY the subreddits listed in the 'Allowed Ban Subreddits' field will be able to ban users in this subreddit.",
                             scope: SettingScope.Installation,
                             type: "boolean",
                         },
                         {
-                            ...validatedSetting("banAllowList", "Allowed Ban Subreddits"),
+                            ...validatedSetting("subredditAllowList", "Allowed Ban Subreddits"),
                             helpText: "One subreddit per line, case-insensitive. ONLY these subreddits can ban users in this subreddit. Ignored if 'Enable Ban Allow List?` is disabled. Leave blank to deny all other subreddits from banning users in this subreddit.",
                             scope: SettingScope.Installation,
                             type: "paragraph",
@@ -115,7 +115,7 @@ Devvit.addSettings([
                     type: "group",
                 },
                 {
-                    ...validatedSetting("banDenyList", "Denied Ban Subreddits"),
+                    ...validatedSetting("subredditDenyList", "Denied Ban Subreddits"),
                     helpText: "One subreddit per line, case-insensitive. A list of subreddits that are not allowed to ban users in this subreddit. Ignored if 'Enable Ban Allow List?` is enabled.",
                     scope: SettingScope.Installation,
                     type: "paragraph",
@@ -213,7 +213,7 @@ async function onPressHandler(event: MenuItemOnPressEvent, context: Context) {
             banUser: true,
             modNoteLabel: await settings.get("defaultModNoteLabel") || "ABUSE_WARNING",
             userMessage: await settings.get("defaultUserMessage") || "",
-            banSubreddits: await settings.get("otherBanSubreddits") || "",
+            banSubreddits: await settings.get("otherSubreddits") || "",
             noteSubreddits: await settings.get("otherNoteSubreddits") || "",
         },
     );
@@ -446,20 +446,20 @@ async function canActionInSubreddit(
         subredditName || ""
     );
     const {
-        banAllowList,
-        banDenyList,
-        enableBanAllowList,
+        subredditAllowList,
+        subredditDenyList,
+        enableAllowlist,
         enableNoteAllowList,
         noteAllowList,
         noteDenyList,
     } = await loadSubredditSettings(context, otherSubreddit);
     let allowed = false;
     if (action === BanHammerAction.Ban) {
-        console.log(`Checking if app can ${actionName} in r/${otherSubreddit} from r/${currentSubredditName} with allow list ${banAllowList
-        || "[]"} and deny list ${banDenyList || "[]"}`);
-        allowed = enableBanAllowList
-            ? new Set(banAllowList).has(currentSubredditName.toLowerCase())
-            : !new Set(banDenyList).has(currentSubredditName.toLowerCase());
+        console.log(`Checking if app can ${actionName} in r/${otherSubreddit} from r/${currentSubredditName} with allow list ${subredditAllowList
+        || "[]"} and deny list ${subredditDenyList || "[]"}`);
+        allowed = enableAllowlist
+            ? new Set(subredditAllowList).has(currentSubredditName.toLowerCase())
+            : !new Set(subredditDenyList).has(currentSubredditName.toLowerCase());
     } else if (action === BanHammerAction.ModNote) {
         console.log(`Checking if app can ${actionName} in r/${otherSubreddit} from r/${currentSubredditName} with allow list ${noteAllowList
         || "[]"} and deny list ${noteDenyList || "[]"}`);
@@ -743,9 +743,9 @@ async function banFormOnSubmitHandler(event: FormOnSubmitEvent<JSONObject>, cont
 //         redis,
 //         subreddit,
 //         {
-//             banAllowList: parseFormField(await settings.get("banAllowList")) as string[],
-//             banDenyList: parseFormField(await settings.get("banDenyList")) as string[],
-//             enableBanAllowList: await settings.get("enableBanAllowList") || false,
+//             subredditAllowList: parseFormField(await settings.get("subredditAllowList")) as string[],
+//             subredditDenyList: parseFormField(await settings.get("subredditDenyList")) as string[],
+//             enableAllowlist: await settings.get("enableAllowlist") || false,
 //             enableNoteAllowList: await settings.get("enableNoteAllowList") || false,
 //             noteAllowList: parseFormField(await settings.get("noteAllowList")) as string[],
 //             noteDenyList: parseFormField(await settings.get("noteDenyList")) as string[],

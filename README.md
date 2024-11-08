@@ -86,6 +86,10 @@ If you have any feedback or suggestions for BanHammer, file a bug report or feat
 
 ## Changes
 
+### 1.1.1
+
+- Revert setting name changes to restore previously set values.
+
 ### 1.1.0
 
 - Added ability for adding mod notes to users.
