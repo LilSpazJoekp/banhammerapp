@@ -68,7 +68,7 @@ export async function writeConfig(
     settings: Partial<BanHammerSettings>,
     useGlobalRedis: boolean,
 ) {
-    const {redis} = context;
+    const {reddit, redis} = context;
     const data: { [p: string]: string } = {};
     for (let k in settings) {
         // @ts-ignore
@@ -79,6 +79,15 @@ export async function writeConfig(
         console.log(`Settings for r/${subreddit} updated: ${JSON.stringify(settings)}`);
     } else {
         await redis.set("wikiUpdateRequired", "true");
+        const wikiPage = await ensureWikiPage(reddit, subreddit);
+        await wikiPage.update(
+            `# BanHammer Configuration
+# This page is used to store the configuration for the BanHammer app.
+# Do not edit this page manually, edit the settings for BanHammer [here](https://developers.reddit.com/r/${(
+                subreddit
+            )}/apps/banhammerapp) instead.`,
+            `Updated settings for BanHammer`,
+        );
     }
 }
 

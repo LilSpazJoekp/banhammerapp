@@ -1,4 +1,4 @@
-import {AppInstall, AppUpgrade} from "@devvit/protos";
+import {ModAction} from "@devvit/protos";
 import {
     Comment,
     Context,
@@ -23,33 +23,6 @@ import {
 } from "./config.js";
 
 
-Devvit.addSchedulerJob({
-    name: "syncConfig",
-    onRun: async (_event, context) => {
-        const {reddit, redis, settings} = context;
-        if (await redis.get("wikiUpdateRequired") === "false") {
-            return;
-        }
-        const subreddit = (
-            await reddit.getCurrentSubreddit()
-        ).name;
-
-        await writeConfigToWikiPage(
-            reddit,
-            {
-                subredditAllowList: parseFormField(await settings.get("subredditAllowList")) as string[],
-                subredditDenyList: parseFormField(await settings.get("subredditDenyList")) as string[],
-                enableAllowlist: await settings.get("enableAllowlist") || false,
-                enableNoteAllowList: await settings.get("enableNoteAllowList") || false,
-                noteAllowList: parseFormField(await settings.get("noteAllowList")) as string[],
-                noteDenyList: parseFormField(await settings.get("noteDenyList")) as string[],
-            },
-            subreddit,
-        );
-        await redis.set("wikiUpdateRequired", "false");
-    },
-});
-
 enum BanHammerAction {
     Ban = "ban",
     ModNote = "modNote",
@@ -64,7 +37,6 @@ type OtherSubredditCheckParams = {
 Devvit.configure({
     redditAPI: true,
     redis: true,
-    // modLog: true,
 });
 
 Devvit.addSettings([
@@ -82,7 +54,7 @@ Devvit.addSettings([
         scope: SettingScope.App,
         type: "boolean",
     },
-])
+]);
 
 Devvit.addSettings([
         {
@@ -188,8 +160,8 @@ Devvit.addSettings([
 );
 
 Devvit.addTrigger({
-    events: ["AppInstall", "AppUpgrade"],
-    onEvent: onEventHandler,
+    events: ["ModAction"],
+    onEvent: onModActionEventHandler,
 });
 
 Devvit.addMenuItem({
@@ -334,7 +306,7 @@ function validatedSetting(field: BanHammerSettingsKeys, display_name: string): {
         const subreddit = subredditName ? subredditName : (
             await reddit.getCurrentSubreddit()
         ).name;
-        const useGlobalRedis: boolean = await settings.get("enableGlobalRedis") === "true" || false;
+        const useGlobalRedis: boolean = await settings.get("enableGlobalRedis") === "true";
         let currentSetting: string | boolean | string[];
         const currentSettings = await loadSubredditSettings(context, subreddit);
         if (useGlobalRedis) {
@@ -536,10 +508,10 @@ async function banInSubreddit(
                     subredditName: subreddit,
                     username: targetUser?.username || "",
                 });
-                console.log(`Banned from r/${subreddit}`)
+                console.log(`Banned from r/${subreddit}`);
                 return 1;
             } catch (e) {
-                console.error(`Error banning from r/${subreddit}: ${e}`)
+                console.error(`Error banning from r/${subreddit}: ${e}`);
                 ui.showToast({
                     appearance: "neutral",
                     text: `Error while banning from r/${subreddit}`,
@@ -583,7 +555,7 @@ async function addModNote(
                 console.log(`Added mod note in r/${otherSubreddit}`);
                 return 1;
             } catch (e) {
-                console.error(`Error adding mod note in r/${triggeringSubreddit}: ${e}`)
+                console.error(`Error adding mod note in r/${triggeringSubreddit}: ${e}`);
                 ui.showToast({
                     appearance: "neutral",
                     text: `Error adding mod note in r/${triggeringSubreddit}`,
@@ -637,7 +609,7 @@ async function banFormOnSubmitHandler(event: FormOnSubmitEvent<JSONObject>, cont
     let item: Comment | Post = location === "comment"
         ? await reddit.getCommentById(targetId)
         : await reddit.getPostById(targetId);
-    const targetUser: User | undefined = await reddit.getUserById(item.authorId || "")
+    const targetUser: User | undefined = await reddit.getUserById(item.authorId || "");
     let subredditsToBan: string[] = (
         parseFormField(triggeringSubreddit + (
             event.values.banSubreddits || false ? `\n${(
@@ -711,70 +683,43 @@ async function banFormOnSubmitHandler(event: FormOnSubmitEvent<JSONObject>, cont
         });
 }
 
-// async function onEventHandler(
-//     event: ModAction | AppInstall | AppUpgrade,
-//     context: TriggerContext,
-// ) {
-//     const {reddit, redis, settings, subredditName} = context;
-//     // console.log("Handling event", event);
-//     if ((
-//         await redis.get("wiki_update_required") || "false"
-//     ) === "false") {
-//         return;
-//     }
-//     console.log("Updating wiki page");
-//     // @ts-ignore
-//     if (event.type == "ModAction") {
-//         const {action, moderator} = event as ModAction;
-//         // if (action !== "dev_platform_app_changed" || moderator?.name !== appUser.username) {
-//         if ((
-//             action !== "wikirevise" && action !== "dev_platform_app_changed"
-//         ) || moderator?.name !== (
-//             await reddit.getAppUser()
-//         ).username) {
-//             return;
-//         }
-//     }
-//     const subreddit = subredditName ? subredditName : (
-//         await reddit.getCurrentSubreddit()
-//     ).name;
-//     await writeConfig(
-//         reddit,
-//         redis,
-//         subreddit,
-//         {
-//             subredditAllowList: parseFormField(await settings.get("subredditAllowList")) as string[],
-//             subredditDenyList: parseFormField(await settings.get("subredditDenyList")) as string[],
-//             enableAllowlist: await settings.get("enableAllowlist") || false,
-//             enableNoteAllowList: await settings.get("enableNoteAllowList") || false,
-//             noteAllowList: parseFormField(await settings.get("noteAllowList")) as string[],
-//             noteDenyList: parseFormField(await settings.get("noteDenyList")) as string[],
-//         },
-//         await settings.get("enableGlobalRedis") === "true" || false,
-//     );
-// }
-
-async function onEventHandler(
-    _event: AppInstall | AppUpgrade,
+async function onModActionEventHandler(
+    event: ModAction,
     context: TriggerContext,
 ) {
-    const {scheduler, settings} = context;
+    const {reddit, redis, settings, subredditName} = context;
     if ((
-        await settings.get("enableGlobalRedis") === "false"
-    )) {
-        (
-            await scheduler.listJobs()
-        ).map(async (job) => {
-            await scheduler.cancelJob(job.id);
-        });
-        await scheduler.runJob({
-            name: "syncConfig",
-            cron: "* * * * * *",
-        });
+        await redis.get("wikiUpdateRequired")
+    ) === "false") {
+        return;
     }
-
+    console.log("Updating wiki page");
+    // @ts-ignore
+    const {action, moderator} = event as ModAction;
+    if ((
+        action !== "wikirevise" && action !== "dev_platform_app_changed"
+    ) || moderator?.name !== (
+        await reddit.getAppUser()
+    ).username) {
+        return;
+    }
+    const subreddit = subredditName ? subredditName : (
+        await reddit.getCurrentSubreddit()
+    ).name;
+    await redis.set("wikiUpdateRequired", "false");
+    await writeConfigToWikiPage(
+        reddit,
+        {
+            subredditAllowList: parseFormField(await settings.get("subredditAllowList")) as string[],
+            subredditDenyList: parseFormField(await settings.get("subredditDenyList")) as string[],
+            enableAllowlist: await settings.get("enableAllowlist") || false,
+            enableNoteAllowList: await settings.get("enableNoteAllowList") || false,
+            noteAllowList: parseFormField(await settings.get("noteAllowList")) as string[],
+            noteDenyList: parseFormField(await settings.get("noteDenyList")) as string[],
+        },
+        subreddit,
+    );
 }
-
 
 // noinspection JSUnusedGlobalSymbols
 export default Devvit;

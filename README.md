@@ -86,6 +86,10 @@ If you have any feedback or suggestions for BanHammer, file a bug report or feat
 
 ## Changes
 
+### 1.1.2
+
+- Remove scheduled job for keeping settings in sync with wiki page.
+
 ### 1.1.1
 
 - Revert setting name changes to restore previously set values.
