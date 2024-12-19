@@ -86,6 +86,10 @@ If you have any feedback or suggestions for BanHammer, file a bug report or feat
 
 ## Changes
 
+### 1.1.3
+
+- Update devvit version for vulnerability fix.
+
 ### 1.1.2
 
 - Remove scheduled job for keeping settings in sync with wiki page.
