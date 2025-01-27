@@ -55,9 +55,10 @@ selecting the context menu action, you will see a dialog box where you can confi
 - **Ban User?**: Toggle to ban the user in the specified subreddit(s).
 - **Duration**: The duration of the ban in days. If set to 0, the ban will be permanent. Defaults to 0.
 - **Additional Info/Ban Mod Note**: Additional information or a mod note to include with the ban. This is only visible
-  to other moderators.
-- **User Message**: A message to send to the user when they are banned. For example, "Hello, {{username}}, you have been
-  banned from {{subreddit}} for posting excessive spam.". Defaults to the message set in the app's settings page.
+  to other moderators. Supports placeholders, see above for supported placeholders.
+- **User Message**: A message to send to the user when they are banned. Supports placeholders, see above for supported
+  placeholders. For example, "Hello, {{username}}, you have beenbanned from {{subreddit}} for posting excessive spam.".
+  Defaults to the message set in the app's settings page.
 - **Additional Ban Subreddits**: Additional subreddits to ban the user from. If left blank, the user will only be banned
   from the subreddit the ban was initiated in. One subreddit per line, case-insensitive. Defaults to the subreddits
   specified in the 'Other Subreddits' field on the app's settings page.
@@ -85,6 +86,11 @@ If you have any feedback or suggestions for BanHammer, file a bug report or feat
 [GitHub page](https://github.com/LilSpazJoekp/banhammerapp).
 
 ## Changes
+
+### 1.2.1
+
+- Added support for using placeholders in the "Additional Info/Ban Mod Note" field.
+- Fix a bug where banning would not work if the user message field was left blank. 
 
 ### 1.1.3
 

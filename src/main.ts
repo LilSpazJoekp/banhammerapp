@@ -192,7 +192,7 @@ async function onPressHandler(event: MenuItemOnPressEvent, context: Context) {
 }
 
 function replaceTokens(message: string, banItem: Comment | Post, remoteSubreddit: string): string {
-    return message
+    return (message ?? "")
         .replace("{{author}}", banItem.authorName)
         .replace("{{kind}}", banItem instanceof Comment ? "comment" : "post")
         .replace("{{originSubreddit}}", banItem.subredditName)
@@ -224,7 +224,7 @@ function generateActionForm(data: JSONObject): Form {
                     },
                     {
                         defaultValue: data.reason as string || "",
-                        helpText: "Additional details or reason for the ban. Will not be sent to the user.",
+                        helpText: "Additional details or reason for the ban. Will not be sent to the user. Supports placeholders. See app directory page for placeholder details.",
                         label: "Additional Info/Ban Mod Note",
                         name: "reason",
                         required: false,
@@ -232,7 +232,7 @@ function generateActionForm(data: JSONObject): Form {
                     },
                     {
                         defaultValue: data.userMessage as string || "",
-                        helpText: "Message to send to user.",
+                        helpText: "Message to send to user. Supports placeholders. See app directory page for placeholder details.",
                         label: "User Message",
                         name: "userMessage",
                         type: "paragraph",
@@ -503,7 +503,7 @@ async function banInSubreddit(
                     context: targetId,
                     duration: duration > 0 ? duration : undefined,
                     message: replaceTokens(userMessage, item, subreddit),
-                    note: reason,
+                    note: replaceTokens(reason, item, subreddit),
                     reason: `Mass ban by u/${triggeringMod?.username} from r/${triggeringSubreddit} utilizing the BanHammerApp.`,
                     subredditName: subreddit,
                     username: targetUser?.username || "",
