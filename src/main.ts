@@ -191,16 +191,28 @@ async function onPressHandler(event: MenuItemOnPressEvent, context: Context) {
     );
 }
 
-function replaceTokens(message: string, banItem: Comment | Post, remoteSubreddit: string): string {
-    return (message ?? "")
-        .replace("{{author}}", banItem.authorName)
-        .replace("{{kind}}", banItem instanceof Comment ? "comment" : "post")
-        .replace("{{originSubreddit}}", banItem.subredditName)
-        .replace("{{subreddit}}", remoteSubreddit)
-        .replace("{{url}}", getContextLink(banItem));
+function replaceTokens(
+    banItem: Comment | Post,
+    message: string,
+    parentPost: Post,
+    remoteSubreddit: string,
+    triggeringMod: User | undefined,
+): string {
+    return (
+        message ?? ""
+    )
+        .replace(/(u\/)?\{\{actioningMod}}/g, () => triggeringMod ? `u/${triggeringMod.username}` : "a moderator")
+        .replace(/(u\/)?{\{author}}/g, () => `u/${banItem.authorName}`)
+        .replace(/\{\{body}}/g, () => banItem.body || "")
+        .replace(/\{\{kind}}/g, () => banItem instanceof Comment ? "comment" : "post")
+        .replace(/(r\/)?{\{originSubreddit}}/g, () => `r/${banItem.subredditName}`)
+        .replace(/(r\/)?{\{subreddit}}/g, () => `r/${remoteSubreddit}`)
+        .replace(/\{\{title}}/g, () => banItem instanceof Post ? banItem.title : parentPost.title)
+        .replace(/\{\{url}}/g, () => getContextLink(banItem));
 }
 
 function generateActionForm(data: JSONObject): Form {
+    console.log(data.modNoteLabel);
     return {
         fields: [
             {
@@ -481,15 +493,16 @@ async function resolveSubreddit(context: Context, subredditName: string): Promis
 
 async function banInSubreddit(
     context: Context,
-    subreddit: string,
-    triggeringSubreddit: string,
     item: Comment | Post,
-    triggeringMod: User | undefined,
+    parentPost: Post,
+    subreddit: string,
     targetId: string,
+    triggeringMod: User | undefined,
+    triggeringSubreddit: string,
     duration: number,
-    userMessage: string,
     reason: string,
     targetUser: User | undefined,
+    userMessage: string,
 ): Promise<number> {
     const {reddit, ui} = context;
     if (await checkModPermissions({action: BanHammerAction.Ban, context, otherSubreddit: subreddit})) {
@@ -502,8 +515,8 @@ async function banInSubreddit(
                 await reddit.banUser({
                     context: targetId,
                     duration: duration > 0 ? duration : undefined,
-                    message: replaceTokens(userMessage, item, subreddit),
-                    note: replaceTokens(reason, item, subreddit),
+                    message: replaceTokens(item, userMessage, parentPost, subreddit, triggeringMod),
+                    note: replaceTokens(item, reason, parentPost, subreddit, triggeringMod),
                     reason: `Mass ban by u/${triggeringMod?.username} from r/${triggeringSubreddit} utilizing the BanHammerApp.`,
                     subredditName: subreddit,
                     username: targetUser?.username || "",
@@ -523,13 +536,15 @@ async function banInSubreddit(
 }
 
 async function addModNote(
-    otherSubreddit: string,
-    triggeringSubreddit: string,
     context: Context,
-    event: FormOnSubmitEvent<JSONObject>,
-    label: string,
     item: Comment | Post,
+    otherSubreddit: string,
+    parentPost: Post,
     targetUser: User | undefined,
+    triggeringMod: User | undefined,
+    triggeringSubreddit: string,
+    label: string,
+    note: string,
 ): Promise<number> {
     const {reddit, ui} = context;
     if (await checkModPermissions({action: BanHammerAction.ModNote, context, otherSubreddit})) {
@@ -540,14 +555,14 @@ async function addModNote(
             otherSubreddit,
         })) {
             try {
-                console.log(`note: ${event.values.note}`);
+                console.log(`note: ${note}`);
                 await reddit.addModNote({
                     label: label as UserNoteLabel,
-                    note: replaceTokens(event.values.note + (
+                    note: replaceTokens(item, note + (
                         inRemoteSubreddit
                             ? ""
                             : "\nSubmitted Content: {{url}}"
-                    ), item, otherSubreddit),
+                    ), parentPost, otherSubreddit, triggeringMod),
                     subreddit: otherSubreddit,
                     user: targetUser?.username as string,
                     redditId: inRemoteSubreddit ? item.id : undefined,
@@ -568,9 +583,10 @@ async function addModNote(
 
 async function banFormOnSubmitHandler(event: FormOnSubmitEvent<JSONObject>, context: Context) {
     const {reddit, redis, ui, userId} = context;
-    const label = (
-        event.values.modNoteLabel as string[]
-    )[0];
+    const labels = (
+        event.values.modNoteLabel as string[] | null
+    ) || [];
+    const label = labels.length > 0 ? labels[0] : "ABUSE_WARNING";
     if (!event.values.banUser && !event.values.addNote) {
         ui.showToast({
             appearance: "neutral",
@@ -632,6 +648,7 @@ async function banFormOnSubmitHandler(event: FormOnSubmitEvent<JSONObject>, cont
     ));
     let subsNotedIn: number = 0;
     let subsBannedFrom: number = 0;
+    let parentPost: Post = await reddit.getPostById(item instanceof Post ? item.id : item.postId);
     if (event.values.banUser) {
         subsBannedFrom = (
             await Promise.all(
@@ -639,15 +656,16 @@ async function banFormOnSubmitHandler(event: FormOnSubmitEvent<JSONObject>, cont
                     .filter((value) => value !== "")
                     .map((otherSubreddit) => banInSubreddit(
                         context,
-                        otherSubreddit,
-                        triggeringSubreddit,
                         item,
-                        triggeringMod,
+                        item instanceof Comment ? parentPost : item,
+                        otherSubreddit,
                         targetId,
+                        triggeringMod,
+                        triggeringSubreddit,
                         event.values.duration as number,
-                        event.values.userMessage as string,
                         event.values.reason as string,
                         targetUser,
+                        event.values.userMessage as string,
                     )))
         )
             .filter((banned) => banned > 0)
@@ -659,13 +677,15 @@ async function banFormOnSubmitHandler(event: FormOnSubmitEvent<JSONObject>, cont
                 subredditsToModNote.map((value) => resolvedSubreddits.get(value) || "")
                     .filter((value) => value !== "")
                     .map((otherSubreddit) => addModNote(
-                        otherSubreddit,
-                        triggeringSubreddit,
                         context,
-                        event,
-                        label,
                         item,
+                        otherSubreddit,
+                        parentPost,
                         targetUser,
+                        triggeringMod,
+                        triggeringSubreddit,
+                        label,
+                        event.values.note as string,
                     )))
         )
             .filter((noted) => noted > 0)
