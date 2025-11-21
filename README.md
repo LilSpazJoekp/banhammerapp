@@ -111,6 +111,12 @@ If you have any feedback or suggestions for BanHammer, file a bug report or feat
 
 ## Changes
 
+### 1.3.1
+
+- Fixed a bug where incorrect capitalization of subreddit names in allow/deny lists would cause bans or mod notes to not be
+  applied.
+- Added error messages when a ban or mod note fails to be applied.
+
 ### 1.3.0
 
 - Fixed a bug that would cause an unexpected crash when actioning a user if a mod note label was not selected.

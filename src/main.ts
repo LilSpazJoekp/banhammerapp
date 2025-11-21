@@ -411,21 +411,33 @@ async function checkModPermissions(
     return allowed;
 }
 
+function containsSubreddit(subredditList: string[], currentSubredditName: string): boolean {
+    return new Set(subredditList.map((sub) => sub.toLowerCase())).has(currentSubredditName.toLowerCase());
+}
+
 async function canActionInSubreddit(
     {action, context, otherSubreddit}: OtherSubredditCheckParams,
-): Promise<boolean> {
+): Promise<(boolean | any)[]> {
     let actionName = action === BanHammerAction.Ban ? "ban" : "add mod note";
     console.log(`Checking if app can ${actionName} in r/${otherSubreddit}`);
     const {reddit, subredditName} = context;
     let appUser = await reddit.getAppUser();
     let moderators = await reddit.getModerators({subredditName: otherSubreddit, username: appUser.username}).all();
-    if (moderators.length === 0)
-        return false;
+    console.log(`Found ${moderators.length} moderators matching app user in r/${otherSubreddit}`);
+    let reason = "";
+    if (moderators.length === 0) {
+        reason = `App is not a moderator in r/${otherSubreddit}`;
+        console.log(reason);
+        return [false, reason];
+    }
     let permissions = await moderators[0].getModPermissionsForSubreddit(otherSubreddit);
     if (!(
         permissions.includes("all") || permissions.includes("access")
-    ))
-        return false;
+    )) {
+        reason = `App does not have enough permissions in r/${otherSubreddit}`;
+        console.log(reason);
+        return [false, reason];
+    }
     const currentSubredditName = (
         subredditName || ""
     );
@@ -442,16 +454,18 @@ async function canActionInSubreddit(
         console.log(`Checking if app can ${actionName} in r/${otherSubreddit} from r/${currentSubredditName} with allow list ${subredditAllowList
         || "[]"} and deny list ${subredditDenyList || "[]"}`);
         allowed = enableAllowlist
-            ? new Set(subredditAllowList).has(currentSubredditName.toLowerCase())
-            : !new Set(subredditDenyList).has(currentSubredditName.toLowerCase());
+            ? containsSubreddit(subredditAllowList, currentSubredditName)
+            : !containsSubreddit(subredditDenyList, currentSubredditName);
+        reason = allowed ? "" : `Banning from r/${otherSubreddit} is not allowed from r/${currentSubredditName}`;
     } else if (action === BanHammerAction.ModNote) {
         console.log(`Checking if app can ${actionName} in r/${otherSubreddit} from r/${currentSubredditName} with allow list ${noteAllowList
         || "[]"} and deny list ${noteDenyList || "[]"}`);
         allowed = enableNoteAllowList
-            ? new Set(noteAllowList).has(currentSubredditName.toLowerCase())
-            : !new Set(noteDenyList).has(currentSubredditName.toLowerCase());
+            ? containsSubreddit(noteAllowList, currentSubredditName)
+            : !containsSubreddit(noteDenyList, currentSubredditName);
+        reason = allowed ? "" : `Adding mod notes in r/${otherSubreddit} is not allowed from r/${currentSubredditName}`;
     }
-    return allowed;
+    return [allowed, reason];
 }
 
 function humanList(items: string[]): string {
@@ -506,11 +520,12 @@ async function banInSubreddit(
 ): Promise<number> {
     const {reddit, ui} = context;
     if (await checkModPermissions({action: BanHammerAction.Ban, context, otherSubreddit: subreddit})) {
-        if (subreddit === triggeringSubreddit || await canActionInSubreddit({
-            action: BanHammerAction.Ban,
-            context,
-            otherSubreddit: subreddit,
-        })) {
+        let [canBan, failureReason] = await canActionInSubreddit({
+          action: BanHammerAction.Ban,
+          context,
+          otherSubreddit: subreddit
+        });
+        if (subreddit === triggeringSubreddit || canBan) {
             try {
                 await reddit.banUser({
                     context: targetId,
@@ -530,6 +545,12 @@ async function banInSubreddit(
                     text: `Error while banning from r/${subreddit}`,
                 });
             }
+        } else {
+            ui.showToast({
+              appearance: "neutral",
+              text: `Cannot ban from r/${subreddit}: ${failureReason}`,
+            });
+            console.log(`Cannot ban from r/${subreddit}: ${failureReason}`);
         }
     }
     return 0;
@@ -549,11 +570,12 @@ async function addModNote(
     const {reddit, ui} = context;
     if (await checkModPermissions({action: BanHammerAction.ModNote, context, otherSubreddit})) {
         const inRemoteSubreddit = otherSubreddit === triggeringSubreddit;
-        if (inRemoteSubreddit || await canActionInSubreddit({
-            action: BanHammerAction.ModNote,
-            context,
-            otherSubreddit,
-        })) {
+        let [canNote, failureReason] = await canActionInSubreddit({
+          action: BanHammerAction.ModNote,
+          context,
+          otherSubreddit,
+        });
+        if (inRemoteSubreddit || canNote) {
             try {
                 console.log(`note: ${note}`);
                 await reddit.addModNote({
@@ -576,6 +598,12 @@ async function addModNote(
                     text: `Error adding mod note in r/${triggeringSubreddit}`,
                 });
             }
+        } else {
+            ui.showToast({
+              appearance: "neutral",
+              text: `Cannot add mod note in r/${otherSubreddit}: ${failureReason}`,
+            });
+            console.log(`Cannot add mod note in r/${otherSubreddit}: ${failureReason}`);
         }
     }
     return 0;
