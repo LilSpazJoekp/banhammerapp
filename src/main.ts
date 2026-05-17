@@ -47,13 +47,6 @@ Devvit.addSettings([
         scope: SettingScope.App,
         type: "boolean",
     },
-    {
-        defaultValue: false,
-        label: "Enable Mod Log Entry",
-        name: "enableModLogEntry",
-        scope: SettingScope.App,
-        type: "boolean",
-    },
 ]);
 
 Devvit.addSettings([
@@ -314,7 +307,7 @@ function validatedSetting(field: BanHammerSettingsKeys, display_name: string): {
         event: SettingsFormFieldValidatorEvent<string | boolean>,
         context: Context,
     ) => {
-        const {modLog, reddit, redis, subredditName, settings} = context;
+        const {reddit, redis, subredditName, settings} = context;
         const subreddit = subredditName ? subredditName : (
             await reddit.getCurrentSubreddit()
         ).name;
@@ -363,12 +356,6 @@ function validatedSetting(field: BanHammerSettingsKeys, display_name: string): {
             },
             useGlobalRedis,
         );
-        if (await settings.get("enableModLogEntry") === "true") {
-            await modLog.add({
-                action: "dev_platform_app_changed",
-                details: `Updated BanHammer setting "${display_name}": ${changeStrings.join(" and ")}`,
-            });
-        }
         console.log(`Updated Setting "${display_name}": ${changeStrings.join(" and ")}`);
     };
     return {label: display_name, name: field, onValidate: validator};

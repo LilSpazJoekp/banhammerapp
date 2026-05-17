@@ -111,6 +111,11 @@ If you have any feedback or suggestions for BanHammer, file a bug report or feat
 
 ## Changes
 
+### 1.3.2
+
+- Bump devvit version to latest.
+- Removed dormant modlog entry mechanism that was removed from devvit.
+
 ### 1.3.1
 
 - Fixed a bug where incorrect capitalization of subreddit names in allow/deny lists would cause bans or mod notes to not be
