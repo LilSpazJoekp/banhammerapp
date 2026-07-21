@@ -41,11 +41,11 @@ Devvit.configure({
 
 Devvit.addSettings([
     {
-        defaultValue: false,
+        defaultValue: "false",
         label: "Enable Global Redis",
         name: "enableGlobalRedis",
         scope: SettingScope.App,
-        type: "boolean",
+        type: "paragraph",
     },
 ]);
 

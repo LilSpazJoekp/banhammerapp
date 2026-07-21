@@ -111,6 +111,10 @@ If you have any feedback or suggestions for BanHammer, file a bug report or feat
 
 ## Changes
 
+### 1.3.3
+
+- Fix global boolean setting always being true.
+
 ### 1.3.2
 
 - Bump devvit version to latest.
