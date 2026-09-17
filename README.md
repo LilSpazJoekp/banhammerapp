@@ -38,14 +38,14 @@ After installing, you can configure the following options on the app's settings 
 - **Denied Mod Note Subreddits**: List of subreddits that are not allowed to add mod notes in your subreddit. This is
   ignored if 'Enable Mod Note Allow List?' is enabled. One subreddit per line, case-insensitive.
 - **Default Mod Note Label**: Default Mod Note label. Defaults to 'Abuse Warning'. Must be one of the following:
-    - Abuse Warning
-    - Ban
-    - Bot Ban
-    - Helpful User
-    - Perma Ban
-    - Solid Contributor
-    - Spam Warning
-    - Spam Watch
+  - Abuse Warning
+  - Ban
+  - Bot Ban
+  - Helpful User
+  - Perma Ban
+  - Solid Contributor
+  - Spam Warning
+  - Spam Watch
 - **Default Mod Note**: The default mod note to add to the user. Supports placeholders, see below for supported
   placeholders. For example, "User was banned from r/{{subreddit}} for posting the following {{kind}} in
   {{originSubreddit}}: {{url}}.".
@@ -88,14 +88,14 @@ selecting the context menu action, you will see a dialog box where you can confi
 - **Add Mod Note?**: Toggle to add a mod note for the user in the specified subreddit(s). Supports placeholders, see
   above for supported placeholders.
 - **Mod Note Label**: Select a label for the mod note. Options include:
-    - Abuse Warning
-    - Spam Warning
-    - Spam Watch
-    - Solid Contributor
-    - Helpful User
-    - Ban
-    - Bot Ban
-    - Perma Ban
+  - Abuse Warning
+  - Spam Warning
+  - Spam Watch
+  - Solid Contributor
+  - Helpful User
+  - Ban
+  - Bot Ban
+  - Perma Ban
 - **Mod Note**: Text for the mod note. This is only visible to other moderators.
 - **Additional Mod Note Subreddits**: Additional subreddits to add a mod note in. If left blank, the mod note will only
   be added to the subreddit it was initiated in. One subreddit per line, case-insensitive.
@@ -111,9 +111,9 @@ If you have any feedback or suggestions for BanHammer, file a bug report or feat
 
 ## Changes
 
-### 1.3.3
+### 1.3.5
 
-- Fix global boolean setting always being true.
+- Fix issue when unable to load subreddit settings from wiki. Hold over until global redis is enabled.
 
 ### 1.3.2
 

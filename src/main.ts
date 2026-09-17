@@ -399,7 +399,7 @@ async function checkModPermissions(
 }
 
 function containsSubreddit(subredditList: string[], currentSubredditName: string): boolean {
-    return new Set(subredditList.map((sub) => sub.toLowerCase())).has(currentSubredditName.toLowerCase());
+    return new Set((subredditList ?? []).map((sub) => sub.toLowerCase())).has(currentSubredditName.toLowerCase());
 }
 
 async function canActionInSubreddit(
@@ -508,9 +508,9 @@ async function banInSubreddit(
     const {reddit, ui} = context;
     if (await checkModPermissions({action: BanHammerAction.Ban, context, otherSubreddit: subreddit})) {
         let [canBan, failureReason] = await canActionInSubreddit({
-          action: BanHammerAction.Ban,
-          context,
-          otherSubreddit: subreddit
+            action: BanHammerAction.Ban,
+            context,
+            otherSubreddit: subreddit
         });
         if (subreddit === triggeringSubreddit || canBan) {
             try {
@@ -534,8 +534,8 @@ async function banInSubreddit(
             }
         } else {
             ui.showToast({
-              appearance: "neutral",
-              text: `Cannot ban from r/${subreddit}: ${failureReason}`,
+                appearance: "neutral",
+                text: `Cannot ban from r/${subreddit}: ${failureReason}`,
             });
             console.log(`Cannot ban from r/${subreddit}: ${failureReason}`);
         }
@@ -558,9 +558,9 @@ async function addModNote(
     if (await checkModPermissions({action: BanHammerAction.ModNote, context, otherSubreddit})) {
         const inRemoteSubreddit = otherSubreddit === triggeringSubreddit;
         let [canNote, failureReason] = await canActionInSubreddit({
-          action: BanHammerAction.ModNote,
-          context,
-          otherSubreddit,
+            action: BanHammerAction.ModNote,
+            context,
+            otherSubreddit,
         });
         if (inRemoteSubreddit || canNote) {
             try {
@@ -587,8 +587,8 @@ async function addModNote(
             }
         } else {
             ui.showToast({
-              appearance: "neutral",
-              text: `Cannot add mod note in r/${otherSubreddit}: ${failureReason}`,
+                appearance: "neutral",
+                text: `Cannot add mod note in r/${otherSubreddit}: ${failureReason}`,
             });
             console.log(`Cannot add mod note in r/${otherSubreddit}: ${failureReason}`);
         }
